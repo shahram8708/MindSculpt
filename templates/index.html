@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MindSculpt</title>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.10.3/font/bootstrap-icons.min.css">
+    <style>
+        .container {
+            margin-top: 40px;
+        }
+
+        .output-container {
+            margin-top: 30px;
+        }
+
+        .btn-primary,
+        .btn-secondary {
+            width: 100%;
+            padding: 10px;
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .spinner-border {
+            display: none;
+        }
+
+        .loading-text {
+            font-weight: bold;
+        }
+
+        .instructions {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .btn-group {
+            margin-top: 10px;
+            display: flex;
+            justify-content: space-around;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="text-center mb-4">
+            <h2>MindSculpt</h2>
+            <p class="text-muted">Upload PDFs and enter a prompt to analyze key insights, topics, or potential questions
+                based on your content.</p>
+        </div>
+
+        <div class="instructions">
+            <h5>Instructions</h5>
+            <ul class="list-unstyled">
+                <li><i class="fas fa-check-circle text-success"></i> Upload multiple PDF documents as needed.</li>
+                <li><i class="fas fa-check-circle text-success"></i> Enter a specific prompt in the text box to guide
+                    the analysis.</li>
+                <li><i class="fas fa-check-circle text-success"></i> Click "Analyze" to start the analysis process.</li>
+                <li><i class="fas fa-check-circle text-success"></i> Results will be displayed below once analysis is
+                    complete.</li>
+            </ul>
+        </div>
+
+        <div class="form-group">
+            <label for="pdfUpload"><strong>Select Multiple PDFs:</strong></label>
+            <input type="file" class="form-control-file" id="pdfUpload" multiple accept="application/pdf">
+        </div>
+
+        <div class="form-group">
+            <label for="userPrompt"><strong>Enter Your Prompt:</strong></label>
+            <textarea class="form-control" id="userPrompt" rows="3"
+                placeholder="Enter the specific questions or topics you want to focus on..."></textarea>
+        </div>
+
+        <button id="analyzeBtn" class="btn btn-primary">
+            <span>Analyze</span>
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        </button>
+
+        <div id="output" class="output-container mt-4"></div>
+
+        <div class="btn-group">
+            <button id="copyBtn" class="btn btn-secondary" style="display: none;">
+                <i class="bi bi-clipboard"></i>
+            </button>
+            <button id="playBtn" class="btn btn-secondary" style="display: none;">
+                <i class="bi bi-play-circle"></i>
+            </button>
+            <button id="stopBtn" class="btn btn-secondary" style="display: none;">
+                <i class="bi bi-stop-circle"></i>
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        document.getElementById('analyzeBtn').addEventListener('click', handlePDFUpload);
+
+        async function handlePDFUpload() {
+            const fileInput = document.getElementById('pdfUpload');
+            const promptInput = document.getElementById('userPrompt').value.trim();
+            const files = fileInput.files;
+            const outputDiv = document.getElementById('output');
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            const spinner = analyzeBtn.querySelector('.spinner-border');
+
+            if (!promptInput) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            outputDiv.innerHTML = '';
+            spinner.style.display = 'inline-block';
+            analyzeBtn.disabled = true;
+
+            const images = [];
+
+            try {
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const pdfDoc = await pdfjsLib.getDocument(URL.createObjectURL(file)).promise;
+
+                    for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+                        const page = await pdfDoc.getPage(pageNum);
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        const viewport = page.getViewport({ scale: 1.5 });
+
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        images.push(blob);
+                    }
+                }
+
+                const formData = new FormData();
+                formData.append('prompt', promptInput);
+                images.forEach((image, index) => formData.append(`images`, image, `page_${index}.png`));
+
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.html) {
+                    outputDiv.innerHTML = result.html;
+
+                    document.getElementById('copyBtn').style.display = 'inline-block';
+                    document.getElementById('playBtn').style.display = 'inline-block';
+                    document.getElementById('stopBtn').style.display = 'inline-block';
+
+                    setupAudioPlayback(result.html);
+                } else {
+                    outputDiv.innerHTML = `<div class="alert alert-danger">Error: ${result.error}</div>`;
+                }
+            } catch (error) {
+                outputDiv.innerHTML = `<div class="alert alert-danger">Failed to process PDF: ${error.message}</div>`;
+            } finally {
+                spinner.style.display = 'none';
+                analyzeBtn.disabled = false;
+            }
+        }
+
+        function setupAudioPlayback(text) {
+            let speech = new SpeechSynthesisUtterance(text);
+            let isPlaying = false;
+
+            document.getElementById('playBtn').onclick = () => {
+                if (!isPlaying) {
+                    window.speechSynthesis.speak(speech);
+                    isPlaying = true;
+                }
+            };
+
+            document.getElementById('stopBtn').onclick = () => {
+                window.speechSynthesis.cancel();
+                isPlaying = false;
+            };
+
+            document.getElementById('copyBtn').onclick = () => {
+                navigator.clipboard.writeText(text).then(() => {
+                    alert('Response copied to clipboard!');
+                });
+            };
+        }
+    </script>
+
+    <script src="https://kit.fontawesome.com/a076d05399.js"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</body>
+
+</html>
